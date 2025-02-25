@@ -1,0 +1,162 @@
+version: "3.8"
+
+services:
+  # -------------------------------------------------------------------------
+  # PostgreSQL
+  # Сервис базы данных PostgreSQL, используемый как хранилище метаданных Airflow и MLflow
+  # Здесь задаются параметры пользователя, пароля и имени базы данных
+  # Доступ к PostgreSQL осуществляется на стандартном порту 5432
+  # Все данные базы сохраняются в volume "postgres_data"
+  # -------------------------------------------------------------------------
+  postgres:
+    image: postgres:14
+    container_name: postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # -------------------------------------------------------------------------
+  # MinIO (S3-совместимое хранилище)
+  # Сервис MinIO используется для хранения обработанных изображений и артефактов MLflow
+  # Здесь задаются корневой пользователь и пароль для доступа
+  # Команда "server /data --console-address ":9001"" запускает MinIO с веб-консолью на порту 9001
+  # Сервис пробрасывает порты 9000 (API) и 9001 (веб-консоль) и использует volume "minio_data" для данных
+  # Определён healthcheck для контроля работоспособности MinIO
+  # -------------------------------------------------------------------------
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # -------------------------------------------------------------------------
+  # Airflow
+  # Сервис Apache Airflow для оркестрации пайплайна
+  # Образ собирается из Dockerfile, расположенного в каталоге ./airflow
+  # Airflow зависит от PostgreSQL и MinIO, что гарантирует, что базы и хранилище будут доступны перед запуском
+  # Пробрасывается веб-интерфейс Airflow на порт 8080
+  # Здесь задаются переменные окружения для подключения к базе данных, настройки логирования, путей к данным,
+  # а также параметры для интеграции с MLflow (Tracking Server) и MinIO
+  # Volume "C:/Users/Professional/Desktop/data/images" монтируется как "local_images" в режиме только для чтения
+  # Также монтируются локальные папки с DAG-ами и скриптами, а также файл схемы базы данных
+  # -------------------------------------------------------------------------
+  airflow:
+    build:
+      context: ./airflow
+      dockerfile: Dockerfile
+    container_name: airflow
+    depends_on:
+      - postgres
+      - minio
+    ports:
+      - "8080:8080"
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://airflow:airflow@postgres:5432/airflow"
+      AIRFLOW_CONN_POSTGRES_DEFAULT: "postgresql+psycopg2://airflow:airflow@postgres:5432/airflow"
+      AIRFLOW__LOGGING__BASE_LOG_FOLDER: "/opt/airflow/logs"
+      AIRFLOW__CORE__FERNET_KEY: "VFCwpduh_7ddKDvTMgnwUbNgeYz5JtFA4ubsp0B_l20="
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+      AIRFLOW__LOGGING__REMOTE_LOGGING: "False"
+      LOCAL_IMAGES_PATH: "/opt/airflow/local_images"
+      AIRFLOW__WEBSERVER__AUTHENTICATE: "False"
+      # Настройки MLflow, используемые для логирования экспериментов:
+      MLFLOW_TRACKING_URI: "http://mlflow:5000"
+      AWS_ACCESS_KEY_ID: "minioadmin"
+      AWS_SECRET_ACCESS_KEY: "minioadmin"
+      MLFLOW_S3_ENDPOINT_URL: "http://minio:9000"
+      MLFLOW_DEFAULT_ARTIFACT_ROOT: "s3://mlflow-artifacts"
+      # Параметры для работы с MinIO:
+      MINIO_ENDPOINT: "minio:9000"
+      MINIO_ACCESS_KEY: "minioadmin"
+      MINIO_SECRET_KEY: "minioadmin"
+    volumes:
+      - "C:/Users/Professional/Desktop/data/images:/opt/airflow/local_images:ro"
+      - ./scripts:/opt/airflow/scripts
+      - ./airflow/dags:/opt/airflow/dags
+      - ./db/schema.sql:/opt/airflow/db/schema.sql:ro
+    entrypoint: ["/entrypoint.sh"]
+
+  # -------------------------------------------------------------------------
+  # MLflow Tracking Server
+  # Сервис MLflow для отслеживания экспериментов и логирования моделей
+  # Используется официальный образ из GitHub Container Registry
+  # MLflow запускается с командой, которая устанавливает boto3 (необходим для работы с S3) 
+  # и запускает MLflow Server с заданными параметрами:
+  #   --backend-store-uri: URI для базы данных MLflow (PostgreSQL)
+  #   --default-artifact-root: путь для сохранения артефактов (на S3/MinIO)
+  # Пробрасывается порт 5000 для доступа к MLflow Tracking UI
+  # -------------------------------------------------------------------------
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:latest
+    container_name: mlflow
+    ports:
+      - "5000:5000"
+    command: >
+      sh -c "pip install boto3 && mlflow server --backend-store-uri ${MLFLOW_BACKEND_STORE_URI} --default-artifact-root ${MLFLOW_DEFAULT_ARTIFACT_ROOT} --host 0.0.0.0"
+    environment:
+      MLFLOW_BACKEND_STORE_URI: "postgresql+psycopg2://mlflow:mlflow@postgres:5432/mlflow"
+      MLFLOW_DEFAULT_ARTIFACT_ROOT: "s3://mlflow-artifacts"
+      AWS_ACCESS_KEY_ID: "minioadmin"
+      AWS_SECRET_ACCESS_KEY: "minioadmin"
+      MLFLOW_S3_ENDPOINT_URL: "http://minio:9000"
+    volumes:
+      - mlflow_artifacts:/mlflow/artifacts
+    depends_on:
+      - postgres
+      - minio
+
+  # -------------------------------------------------------------------------
+  # Streamlit Dashboard 
+  # Сервис Streamlit для создания интерактивных дашбордов,
+  # позволяющих визуализировать данные обработки изображений
+  # Образ строится из Dockerfile, расположенного в каталоге ./streamlit_app
+  # Пробрасывается порт 8501 для доступа к веб-интерфейсу дашборда
+  # Также монтируется локальная папка с приложением Streamlit
+  # -------------------------------------------------------------------------
+  streamlit:
+    build:
+      context: ./streamlit_app
+      dockerfile: Dockerfile
+    container_name: streamlit
+    depends_on:
+      - postgres
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./streamlit_app:/app
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: airflow
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      MINIO_ENDPOINT: "minio:9000"
+      CLEARML_WEB_HOST: "http://127.0.0.1:80"
+    command: >
+      streamlit run /app/app.py --server.port=8501 --server.address=0.0.0.0
+
+# -------------------------------------------------------------------------
+# Определение volumes, используемых для хранения данных сервисов
+# -------------------------------------------------------------------------
+volumes:
+  postgres_data:
+  minio_data:
+  mlflow_artifacts:
+  mlflow_data:

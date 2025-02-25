@@ -1,0 +1,33 @@
+# Airflow провайдеры
+apache-airflow-providers-postgres
+apache-airflow-providers-http
+
+# Утилиты
+requests==2.31.0
+beautifulsoup4==4.12.2
+
+pyarrow>=10.0.1,<10.1.0
+
+# MinIO
+minio==7.1.11
+
+
+# Для обработки изображений
+Pillow==9.5.0
+
+# ML: TensorFlow, sklearn
+tensorflow
+scikit-learn
+
+# Для дашборда
+numpy>=1.20,<1.26
+pandas>=1.4,<2.1
+streamlit==1.22.0
+psycopg2-binary==2.9.6
+
+protobuf==3.20.*
+
+mlflow==2.20.2
+pydantic==1.10.8
+typing_extensions==4.5.0
+
