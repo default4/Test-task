@@ -85,15 +85,15 @@ docker-compose up --build -d
   <figcaption>Пример обработанного изображения в MinIO</figcaption>
 </figure>
 
-# Steamlit
+# Streamlit
 
 <figure>
-  <img src="images/steamlit1.png" alt="Дэшбоард часть 1">
+  <img src="images/streamlit1.png" alt="Дэшбоард часть 1">
   <figcaption>Первая половина дэшбоарда в Steamlit</figcaption>
 </figure>
 
 <figure>
-  <img src="images/steamlit2.png" alt="Дэшбоард часть 2">
+  <img src="images/streamlit1.png" alt="Дэшбоард часть 2">
   <figcaption>Вторая половина дэшбоарда в Steamlit</figcaption>
 </figure>
 
